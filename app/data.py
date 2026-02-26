@@ -23,13 +23,19 @@ async def init_moderator_tables():
             )
         ''')
 
-        # Новые колонки в meet_tasks (если не существуют)
-        async with db.execute("PRAGMA table_info(meet_tasks)") as cursor:
-            cols = {row[1] for row in await cursor.fetchall()}
-        if 'admin_notified' not in cols:
-            await db.execute('ALTER TABLE meet_tasks ADD COLUMN admin_notified INTEGER DEFAULT 0')
-        if 'video_file_id' not in cols:
-            await db.execute('ALTER TABLE meet_tasks ADD COLUMN video_file_id TEXT')
+        # Новые колонки в meet_tasks (только если таблица уже существует)
+        async with db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='meet_tasks'"
+        ) as cursor:
+            meet_tasks_exists = await cursor.fetchone()
+
+        if meet_tasks_exists:
+            async with db.execute("PRAGMA table_info(meet_tasks)") as cursor:
+                cols = {row[1] for row in await cursor.fetchall()}
+            if 'admin_notified' not in cols:
+                await db.execute('ALTER TABLE meet_tasks ADD COLUMN admin_notified INTEGER DEFAULT 0')
+            if 'video_file_id' not in cols:
+                await db.execute('ALTER TABLE meet_tasks ADD COLUMN video_file_id TEXT')
 
         await db.commit()
 
