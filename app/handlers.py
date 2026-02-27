@@ -1,8 +1,9 @@
 import logging
+import os
 
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, FSInputFile
 
 import config
 from data import (
@@ -97,8 +98,10 @@ async def cmd_verifications(message: Message):
 
     await message.answer(f"Запросов на верификацию: {len(items)}")
     for item in items:
+        photo_path = item.get('photo_path')
+        photo = FSInputFile(photo_path) if photo_path and os.path.exists(photo_path) else item['photo_file_id']
         await message.answer_photo(
-            photo=item['photo_file_id'],
+            photo=photo,
             caption=f"Верификация #{item['id']}\nПользователь: {item['user_id']}\nВремя: {item['created_at']}",
             reply_markup=get_verify_keyboard(item['user_id'], item['id']),
         )
