@@ -172,7 +172,11 @@ async def cmd_pending_meets(message: Message):
             f"Место: {task['location']}\n"
             f"Институт: {task['institute']}"
         )
-        if task.get('video_file_id'):
+        video_path = task.get('video_path')
+        if video_path and os.path.exists(video_path):
+            await message.answer_video_note(FSInputFile(video_path))
+            await message.answer(caption, reply_markup=get_meet_keyboard(task['id']))
+        elif task.get('video_file_id'):
             await message.answer_video_note(task['video_file_id'])
             await message.answer(caption, reply_markup=get_meet_keyboard(task['id']))
         else:

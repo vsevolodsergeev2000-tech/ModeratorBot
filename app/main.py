@@ -75,11 +75,20 @@ async def _send_new_meet_tasks(bot: Bot):
             f"Место: {task['location']}\n"
             f"Институт: {task['institute']}"
         )
+        video_path = task.get('video_path')
+        if video_path and os.path.exists(video_path):
+            video = FSInputFile(video_path)
+        elif task.get('video_file_id'):
+            video = task['video_file_id']
+            log.warning(f"Видео встречи #{task['id']} не найдено на диске, используем file_id (может не сработать)")
+        else:
+            video = None
+
         sent = False
         for admin_id in config.ADMIN_IDS:
             try:
-                if task.get('video_file_id'):
-                    await bot.send_video_note(admin_id, task['video_file_id'])
+                if video:
+                    await bot.send_video_note(admin_id, video)
                 await bot.send_message(
                     admin_id,
                     caption,

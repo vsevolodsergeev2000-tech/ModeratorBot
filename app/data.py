@@ -96,13 +96,13 @@ async def get_new_meet_tasks_for_admin() -> List[Dict]:
     """Встречи в статусе waiting_admin, ещё не отправленные администратору."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT id, user1_id, user2_id, initiator_id, institute, location, video_file_id "
+            "SELECT id, user1_id, user2_id, initiator_id, institute, location, video_file_id, video_path "
             "FROM meet_tasks WHERE status = 'waiting_admin' AND admin_notified = 0"
         ) as cursor:
             rows = await cursor.fetchall()
     return [
         {'id': r[0], 'user1_id': r[1], 'user2_id': r[2],
-         'initiator_id': r[3], 'institute': r[4], 'location': r[5], 'video_file_id': r[6]}
+         'initiator_id': r[3], 'institute': r[4], 'location': r[5], 'video_file_id': r[6], 'video_path': r[7]}
         for r in rows
     ]
 
@@ -111,13 +111,13 @@ async def get_all_pending_meet_tasks() -> List[Dict]:
     """Все встречи в статусе waiting_admin."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT id, user1_id, user2_id, initiator_id, institute, location, video_file_id "
+            "SELECT id, user1_id, user2_id, initiator_id, institute, location, video_file_id, video_path "
             "FROM meet_tasks WHERE status = 'waiting_admin' ORDER BY created_at"
         ) as cursor:
             rows = await cursor.fetchall()
     return [
         {'id': r[0], 'user1_id': r[1], 'user2_id': r[2],
-         'initiator_id': r[3], 'institute': r[4], 'location': r[5], 'video_file_id': r[6]}
+         'initiator_id': r[3], 'institute': r[4], 'location': r[5], 'video_file_id': r[6], 'video_path': r[7]}
         for r in rows
     ]
 
