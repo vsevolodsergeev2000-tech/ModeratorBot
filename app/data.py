@@ -46,22 +46,22 @@ async def get_new_pending_verifications() -> List[Dict]:
     """Верификации со статусом pending, ещё не отправленные администратору."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT id, user_id, photo_file_id, created_at "
+            "SELECT id, user_id, photo_file_id, created_at, photo_path "
             "FROM pending_verifications WHERE status = 'pending' AND admin_notified = 0"
         ) as cursor:
             rows = await cursor.fetchall()
-    return [{'id': r[0], 'user_id': r[1], 'photo_file_id': r[2], 'created_at': r[3]} for r in rows]
+    return [{'id': r[0], 'user_id': r[1], 'photo_file_id': r[2], 'created_at': r[3], 'photo_path': r[4]} for r in rows]
 
 
 async def get_all_pending_verifications() -> List[Dict]:
     """Все верификации со статусом pending."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT id, user_id, photo_file_id, created_at "
+            "SELECT id, user_id, photo_file_id, created_at, photo_path "
             "FROM pending_verifications WHERE status = 'pending' ORDER BY created_at"
         ) as cursor:
             rows = await cursor.fetchall()
-    return [{'id': r[0], 'user_id': r[1], 'photo_file_id': r[2], 'created_at': r[3]} for r in rows]
+    return [{'id': r[0], 'user_id': r[1], 'photo_file_id': r[2], 'created_at': r[3], 'photo_path': r[4]} for r in rows]
 
 
 async def mark_verification_notified(verification_id: int):

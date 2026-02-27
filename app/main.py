@@ -1,9 +1,11 @@
 import asyncio
 import logging
+import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import FSInputFile
 
 import config
 from data import (
@@ -40,12 +42,20 @@ async def _send_new_verifications(bot: Bot):
             f"Пользователь: {item['user_id']}\n"
             f"Время: {item['created_at']}"
         )
+        # Используем файл с диска, т.к. file_id от другого бота не работает
+        photo_path = item.get('photo_path')
+        if photo_path and os.path.exists(photo_path):
+            photo = FSInputFile(photo_path)
+        else:
+            photo = item['photo_file_id']
+            log.warning(f"Фото для верификации #{item['id']} не найдено на диске, используем file_id (может не сработать)")
+
         sent = False
         for admin_id in config.ADMIN_IDS:
             try:
                 await bot.send_photo(
                     admin_id,
-                    photo=item['photo_file_id'],
+                    photo=photo,
                     caption=caption,
                     reply_markup=get_verify_keyboard(item['user_id'], item['id']),
                 )
