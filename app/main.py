@@ -88,7 +88,10 @@ async def _send_new_meet_tasks(bot: Bot):
         for admin_id in config.ADMIN_IDS:
             try:
                 if video:
-                    await bot.send_video_note(admin_id, video)
+                    try:
+                        await bot.send_video_note(admin_id, video)
+                    except Exception as e:
+                        log.warning(f"Не удалось отправить видео встречи #{task['id']} администратору {admin_id}: {e}")
                 await bot.send_message(
                     admin_id,
                     caption,

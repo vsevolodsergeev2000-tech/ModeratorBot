@@ -175,15 +175,14 @@ async def cmd_pending_meets(message: Message):
         video_path = task.get('video_path')
         if video_path and os.path.exists(video_path):
             await message.answer_video_note(FSInputFile(video_path))
-            await message.answer(caption, reply_markup=get_meet_keyboard(task['id']))
         elif task.get('video_file_id'):
-            await message.answer_video_note(task['video_file_id'])
-            await message.answer(caption, reply_markup=get_meet_keyboard(task['id']))
+            try:
+                await message.answer_video_note(task['video_file_id'])
+            except Exception:
+                caption += "\n(видео недоступно)"
         else:
-            await message.answer(
-                caption + "\n(видео не прикреплено)",
-                reply_markup=get_meet_keyboard(task['id'])
-            )
+            caption += "\n(видео не прикреплено)"
+        await message.answer(caption, reply_markup=get_meet_keyboard(task['id']))
 
 
 @router.callback_query(F.data.startswith("mm_ok_"))
