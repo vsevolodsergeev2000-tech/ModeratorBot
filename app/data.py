@@ -70,10 +70,26 @@ async def mark_verification_notified(verification_id: int):
         await db.commit()
 
 
-async def approve_verification(user_id: int, verification_id: int):
+async def get_user_id_by_verification(verification_id: int) -> Optional[int]:
+    """Возвращает user_id по ID верификации, или None если не найдена."""
     async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            'SELECT user_id FROM pending_verifications WHERE id = ?', (verification_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+    return row[0] if row else None
+
+
+async def approve_verification(user_id: int, verification_id: int) -> bool:
+    """Атомарно одобряет верификацию. Возвращает False если уже обработана."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE pending_verifications SET status = 'approved' WHERE id = ? AND status = 'pending'",
+            (verification_id,)
+        )
+        if db.total_changes == 0:
+            return False
         await db.execute('UPDATE profiles SET verified = 1 WHERE user_id = ?', (user_id,))
-        await db.execute("UPDATE pending_verifications SET status = 'approved' WHERE id = ?", (verification_id,))
         # Бейдж verified
         async with db.execute(
             'SELECT 1 FROM user_badges WHERE user_id = ? AND badge_type = ?', (user_id, 'verified')
@@ -82,6 +98,7 @@ async def approve_verification(user_id: int, verification_id: int):
         if not exists:
             await db.execute('INSERT INTO user_badges (user_id, badge_type) VALUES (?, ?)', (user_id, 'verified'))
         await db.commit()
+    return True
 
 
 async def decline_verification(verification_id: int):
@@ -149,17 +166,27 @@ def _get_seasonal_multiplier() -> tuple:
 
 
 async def confirm_meet(task_id: int) -> Optional[Dict]:
-    """Подтверждает встречу: начисляет очки и выдаёт бейджи."""
-    task = await get_meet_task_by_id(task_id)
-    if not task or task['status'] != 'waiting_admin':
-        return None
-
+    """Атомарно подтверждает встречу: начисляет очки и выдаёт бейджи."""
     multiplier, season_name = _get_seasonal_multiplier()
     points = int(10 * multiplier)
     year_month = datetime.datetime.now().strftime('%Y-%m')
 
     async with aiosqlite.connect(DB_PATH) as db:
-        for uid in [task['user1_id'], task['user2_id']]:
+        # Атомарное обновление: только если статус ещё waiting_admin
+        await db.execute(
+            "UPDATE meet_tasks SET status = 'confirmed', admin_decision = 1 WHERE id = ? AND status = 'waiting_admin'",
+            (task_id,)
+        )
+        if db.total_changes == 0:
+            return None  # уже обработано
+
+        async with db.execute('SELECT user1_id, user2_id, video_path FROM meet_tasks WHERE id = ?', (task_id,)) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        user1_id, user2_id, video_path = row
+
+        for uid in [user1_id, user2_id]:
             await db.execute(
                 '''INSERT INTO user_points (user_id, year_month, points) VALUES (?, ?, ?)
                    ON CONFLICT(user_id, year_month) DO UPDATE SET points = points + ?''',
@@ -171,33 +198,36 @@ async def confirm_meet(task_id: int) -> Optional[Dict]:
                 if not await cursor.fetchone():
                     await db.execute('INSERT INTO user_badges (user_id, badge_type) VALUES (?, ?)', (uid, 'first_meet'))
 
-        await db.execute(
-            "UPDATE meet_tasks SET status = 'confirmed', admin_decision = 1 WHERE id = ?", (task_id,)
-        )
         await db.commit()
 
     return {
-        'user1_id': task['user1_id'],
-        'user2_id': task['user2_id'],
+        'user1_id': user1_id,
+        'user2_id': user2_id,
         'points': points,
         'multiplier': multiplier,
         'season_name': season_name,
+        'video_path': video_path,
     }
 
 
 async def decline_meet(task_id: int) -> Optional[Dict]:
-    """Отклоняет встречу."""
-    task = await get_meet_task_by_id(task_id)
-    if not task or task['status'] != 'waiting_admin':
-        return None
-
+    """Атомарно отклоняет встречу."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE meet_tasks SET status = 'declined', admin_decision = 0 WHERE id = ?", (task_id,)
+            "UPDATE meet_tasks SET status = 'declined', admin_decision = 0 WHERE id = ? AND status = 'waiting_admin'",
+            (task_id,)
         )
+        if db.total_changes == 0:
+            return None  # уже обработано
+
+        async with db.execute('SELECT user1_id, user2_id, video_path FROM meet_tasks WHERE id = ?', (task_id,)) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+
         await db.commit()
 
-    return {'user1_id': task['user1_id'], 'user2_id': task['user2_id']}
+    return {'user1_id': row[0], 'user2_id': row[1], 'video_path': row[2]}
 
 
 # ---------- Статистика ----------

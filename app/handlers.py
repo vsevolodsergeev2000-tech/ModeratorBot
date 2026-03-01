@@ -1,3 +1,4 @@
+import html
 import logging
 import os
 
@@ -8,12 +9,26 @@ from aiogram.types import Message, CallbackQuery, FSInputFile
 import config
 from data import (
     get_stats, get_all_profiles_with_rating, get_username,
-    get_all_pending_verifications,
+    get_all_pending_verifications, get_user_id_by_verification,
     approve_verification, decline_verification,
     get_all_pending_meet_tasks,
     confirm_meet, decline_meet,
 )
 from keyboards import get_admin_keyboard, get_verify_keyboard, get_meet_keyboard
+
+# Базовые каталоги для медиафайлов (защита от path traversal)
+_DB_DIR = os.path.dirname(os.path.abspath(config.DB_PATH))
+_VERIF_BASE = os.path.join(_DB_DIR, 'verif_photos')
+_MEETS_BASE = os.path.join(_DB_DIR, 'meet_videos')
+
+
+def _safe_path(path: str, base_dir: str) -> str | None:
+    """Возвращает path если он находится внутри base_dir, иначе None."""
+    if not path:
+        return None
+    real = os.path.realpath(path)
+    real_base = os.path.realpath(base_dir)
+    return real if real.startswith(real_base + os.sep) or real == real_base else None
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -56,7 +71,7 @@ async def cmd_stats(message: Message, bot: Bot):
             r_str = f"{r:.2f}⭐"
 
         username = await get_username(bot, p['user_id'])
-        line = f"{r_str} {p['name']} ({username})"
+        line = f"{r_str} {html.escape(p['name'])} ({html.escape(username)})"
 
         if p['gender'] == 'Парень':
             lines_male.append(line)
@@ -98,8 +113,9 @@ async def cmd_verifications(message: Message):
 
     await message.answer(f"Запросов на верификацию: {len(items)}")
     for item in items:
-        photo_path = item.get('photo_path')
-        photo = FSInputFile(photo_path) if photo_path and os.path.exists(photo_path) else item['photo_file_id']
+        raw_path = item.get('photo_path')
+        safe = _safe_path(raw_path, _VERIF_BASE) if raw_path else None
+        photo = FSInputFile(safe) if safe and os.path.exists(safe) else item['photo_file_id']
         await message.answer_photo(
             photo=photo,
             caption=f"Верификация #{item['id']}\nПользователь: {item['user_id']}\nВремя: {item['created_at']}",
@@ -108,19 +124,31 @@ async def cmd_verifications(message: Message):
 
 
 @router.callback_query(F.data.startswith("mv_ok_"))
-async def cb_verify_approve(callback: CallbackQuery, bot: Bot):
+async def cb_verify_approve(callback: CallbackQuery, rating_bot: Bot):
     if not is_admin(callback.from_user.id):
         await callback.answer("Нет прав.", show_alert=True)
         return
 
     parts = callback.data.split("_")
-    user_id = int(parts[2])
-    verification_id = int(parts[3])
+    try:
+        verification_id = int(parts[3])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
 
-    await approve_verification(user_id, verification_id)
+    # Получаем user_id из БД — не доверяем callback_data
+    user_id = await get_user_id_by_verification(verification_id)
+    if not user_id:
+        await callback.answer("Верификация не найдена.", show_alert=True)
+        return
+
+    approved = await approve_verification(user_id, verification_id)
+    if not approved:
+        await callback.answer("Уже обработано.", show_alert=True)
+        return
 
     try:
-        await bot.send_message(user_id, "Ваша верификация одобрена! Вы получили значок верификации.")
+        await rating_bot.send_message(user_id, "Ваша верификация одобрена! Вы получили значок верификации.")
     except Exception as e:
         log.warning(f"Не удалось уведомить {user_id}: {e}")
 
@@ -129,19 +157,28 @@ async def cb_verify_approve(callback: CallbackQuery, bot: Bot):
 
 
 @router.callback_query(F.data.startswith("mv_no_"))
-async def cb_verify_decline(callback: CallbackQuery, bot: Bot):
+async def cb_verify_decline(callback: CallbackQuery, rating_bot: Bot):
     if not is_admin(callback.from_user.id):
         await callback.answer("Нет прав.", show_alert=True)
         return
 
     parts = callback.data.split("_")
-    user_id = int(parts[2])
-    verification_id = int(parts[3])
+    try:
+        verification_id = int(parts[3])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
+
+    # Получаем user_id из БД — не доверяем callback_data
+    user_id = await get_user_id_by_verification(verification_id)
+    if not user_id:
+        await callback.answer("Верификация не найдена.", show_alert=True)
+        return
 
     await decline_verification(verification_id)
 
     try:
-        await bot.send_message(
+        await rating_bot.send_message(
             user_id,
             "Ваш запрос на верификацию отклонён. Попробуйте снова с более чётким фото студенческого билета."
         )
@@ -172,9 +209,10 @@ async def cmd_pending_meets(message: Message):
             f"Место: {task['location']}\n"
             f"Институт: {task['institute']}"
         )
-        video_path = task.get('video_path')
-        if video_path and os.path.exists(video_path):
-            await message.answer_video_note(FSInputFile(video_path))
+        raw_vpath = task.get('video_path')
+        safe_vpath = _safe_path(raw_vpath, _MEETS_BASE) if raw_vpath else None
+        if safe_vpath and os.path.exists(safe_vpath):
+            await message.answer_video_note(FSInputFile(safe_vpath))
         elif task.get('video_file_id'):
             try:
                 await message.answer_video_note(task['video_file_id'])
@@ -186,12 +224,17 @@ async def cmd_pending_meets(message: Message):
 
 
 @router.callback_query(F.data.startswith("mm_ok_"))
-async def cb_meet_confirm(callback: CallbackQuery, bot: Bot):
+async def cb_meet_confirm(callback: CallbackQuery, rating_bot: Bot):
     if not is_admin(callback.from_user.id):
         await callback.answer("Нет прав.", show_alert=True)
         return
 
-    task_id = int(callback.data.split("_")[2])
+    try:
+        task_id = int(callback.data.split("_")[2])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
+
     result = await confirm_meet(task_id)
 
     if not result:
@@ -203,21 +246,35 @@ async def cb_meet_confirm(callback: CallbackQuery, bot: Bot):
 
     for uid in [result['user1_id'], result['user2_id']]:
         try:
-            await bot.send_message(uid, text)
+            await rating_bot.send_message(uid, text)
         except Exception as e:
             log.warning(f"Не удалось уведомить {uid}: {e}")
+
+    # Удаляем видеофайл с диска после подтверждения
+    if result.get('video_path'):
+        safe_vpath = _safe_path(result['video_path'], _MEETS_BASE)
+        if safe_vpath and os.path.exists(safe_vpath):
+            try:
+                os.remove(safe_vpath)
+            except OSError as e:
+                log.warning(f"Не удалось удалить видео {safe_vpath}: {e}")
 
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.answer("Встреча подтверждена, очки начислены.")
 
 
 @router.callback_query(F.data.startswith("mm_no_"))
-async def cb_meet_decline(callback: CallbackQuery, bot: Bot):
+async def cb_meet_decline(callback: CallbackQuery, rating_bot: Bot):
     if not is_admin(callback.from_user.id):
         await callback.answer("Нет прав.", show_alert=True)
         return
 
-    task_id = int(callback.data.split("_")[2])
+    try:
+        task_id = int(callback.data.split("_")[2])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
+
     result = await decline_meet(task_id)
 
     if not result:
@@ -225,10 +282,22 @@ async def cb_meet_decline(callback: CallbackQuery, bot: Bot):
         return
 
     try:
-        await bot.send_message(result['user1_id'], "Ваша встреча не подтверждена администратором. Очки не начислены.")
-        await bot.send_message(result['user2_id'], "Встреча не подтверждена администратором.")
+        await rating_bot.send_message(result['user1_id'], "Ваша встреча не подтверждена администратором. Очки не начислены.")
     except Exception as e:
-        log.warning(f"Ошибка уведомления: {e}")
+        log.warning(f"Не удалось уведомить {result['user1_id']}: {e}")
+    try:
+        await rating_bot.send_message(result['user2_id'], "Встреча не подтверждена администратором.")
+    except Exception as e:
+        log.warning(f"Не удалось уведомить {result['user2_id']}: {e}")
+
+    # Удаляем видеофайл с диска после отклонения
+    if result.get('video_path'):
+        safe_vpath = _safe_path(result['video_path'], _MEETS_BASE)
+        if safe_vpath and os.path.exists(safe_vpath):
+            try:
+                os.remove(safe_vpath)
+            except OSError as e:
+                log.warning(f"Не удалось удалить видео {safe_vpath}: {e}")
 
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.answer("Встреча отклонена.")

@@ -5,6 +5,7 @@ import os
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import FSInputFile
 
 import config
@@ -60,8 +61,12 @@ async def _send_new_verifications(bot: Bot):
                     reply_markup=get_verify_keyboard(item['user_id'], item['id']),
                 )
                 sent = True
+            except TelegramRetryAfter as e:
+                log.warning(f"Flood control: ждём {e.retry_after}с перед повторной отправкой верификации {item['id']}")
+                await asyncio.sleep(e.retry_after)
             except Exception as e:
                 log.warning(f"Не удалось отправить верификацию {item['id']} администратору {admin_id}: {e}")
+            await asyncio.sleep(0.05)
         if sent:
             await mark_verification_notified(item['id'])
 
@@ -90,6 +95,9 @@ async def _send_new_meet_tasks(bot: Bot):
                 if video:
                     try:
                         await bot.send_video_note(admin_id, video)
+                    except TelegramRetryAfter as e:
+                        log.warning(f"Flood control: ждём {e.retry_after}с перед повторной отправкой видео встречи #{task['id']}")
+                        await asyncio.sleep(e.retry_after)
                     except Exception as e:
                         log.warning(f"Не удалось отправить видео встречи #{task['id']} администратору {admin_id}: {e}")
                 await bot.send_message(
@@ -98,15 +106,22 @@ async def _send_new_meet_tasks(bot: Bot):
                     reply_markup=get_meet_keyboard(task['id']),
                 )
                 sent = True
+            except TelegramRetryAfter as e:
+                log.warning(f"Flood control: ждём {e.retry_after}с перед повторной отправкой задания {task['id']}")
+                await asyncio.sleep(e.retry_after)
             except Exception as e:
                 log.warning(f"Не удалось отправить задание {task['id']} администратору {admin_id}: {e}")
+            await asyncio.sleep(0.05)
         if sent:
             await mark_meet_admin_notified(task['id'])
 
 
+_bg_task = None  # Храним ссылку на задачу, чтобы GC её не собрал
+
 async def _on_startup(bot: Bot):
     """Запускает фоновую задачу после полного старта polling."""
-    asyncio.get_event_loop().create_task(notify_admins(bot))
+    global _bg_task
+    _bg_task = asyncio.create_task(notify_admins(bot))
     log.info("Фоновой опрос БД запущен.")
 
 
@@ -118,9 +133,12 @@ async def main():
         token=config.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    rating_bot = Bot(token=config.RATING_BOT_TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
+    dp["rating_bot"] = rating_bot
     dp.startup.register(_on_startup)
+    dp.shutdown.register(rating_bot.session.close)
 
     log.info("ModeratorBot запускается...")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
